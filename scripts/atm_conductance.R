@@ -1,11 +1,16 @@
+#' Compute Atmospheric Conducatance
 #'
-#'
-
-
+#' @param v windspeed (m/s)
+#' @param h vegetation height (m)
+#' @param zm_add height at which windspeed was measured - usually 200cm above vegetation (m)
+#' @param kd displacement scalar - typically 0.7
+#' @param ko roughness scalar - typically 0.1 
+#' @author Jaden Orli
+#' @return atmospheric conductance (Ca) in mm/sec
 
 
 #write a function to calculate atmospheric conductance based on windspeed and vegetation height
-atmospheric_condunctance <- function(v, h, zm_add = 2.0, ko = 0.1, kd = 0.7) {
+atmospheric_condunctance <- function(v, h, zm_add = 2.0, ko, kd) {
   
   
   zd <- kd * h
@@ -19,5 +24,7 @@ atmospheric_condunctance <- function(v, h, zm_add = 2.0, ko = 0.1, kd = 0.7) {
   
   #convert the conductance from m to mm 
   Ca <- Ca * 1000
+  
+  #return the conductance value
   return(Ca)
 }

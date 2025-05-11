@@ -3247,7 +3247,7 @@ h      &amp;\quad \text{= equally likely across a range of 9.5m and 10.5m} \\
 <span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co">#view the format of the function </span></span>
 <span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>atmospheric_condunctance</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
 <div class="cell-output cell-output-stdout">
-<pre><code>function (v, h, zm_add = 2, ko = 0.1, kd = 0.7) 
+<pre><code>function (v, h, zm_add = 2, ko, kd) 
 {
     zd &lt;- kd * h
     zo &lt;- ko * h
