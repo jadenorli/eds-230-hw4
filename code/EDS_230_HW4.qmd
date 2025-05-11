@@ -1,0 +1,668 @@
+---
+title: "Sobol Sensitivity Analysis of Atmospheric Conductance Model"
+subtitle: '<span style="font-size: 30px; text-align: center; display: block;">Comparision of Two Scenarios</span>'
+author: "Jaden Orli"
+date: last-modified
+bibliography: 
+ - references.bib
+execute: 
+  eval: true
+  message: false
+  warning: false 
+format:
+  html:
+    theme: minty
+    css: custom.css
+    toc: true
+    toc-title: "Table of Contents:"
+    toc-depth: 3
+    code-fold: false
+editor:
+  chunk_output_type: inline
+embed-resources: true
+---
+
+
+# I. Background {#background}
+
+This document employs Sobol indices to explore a variance-based sensitivity analysis on two scenarios simulated with a model of atmospheric conductance. 
+
+## a) Sobol Indices
+
+Sobol sequences are a quasi-random sampling technique that is designed to *uniformly* fill the multi-dimensional parameter space. This is achieved by sampling from the unit cube $[0,1]^d$ and then using a quantile transformation to map these values onto the real distributions [@saltelli2010]. The Sobol method requires working in this normalized space ([0,1]) to compute the first-order sensitivity, total sensitivity, and interaction effects by decomposing the total output variance into the corresponding contributions from each input. This sensitivity analysis technique is preferred when working with nonlinear models since it evenly explores all parts of the parameter space while avoiding clumping or gaps that can be associated with random sampling. 
+
+## b) Atmospheric Conductance Model
+
+For this analysis we will use a model developed to calculate atmospheric conductance based on windspeed and vegetation height. The general form of this equation is outlined below: 
+
+$$
+\begin{align}
+
+C_{at} &= \frac{v}{6.25 \cdot \left[ \ln\left( \frac{z_m - z_d}{z_o} \right) \right]^2} \\
+
+\text{where:} \quad \\
+
+C_{at} &\quad \text{= atmospheric conductance (mm/s)} \\
+v      &\quad \text{= wind speed (m/s)} \\
+z_m    &\quad \text{= measurement height above ground (m), typically } h + 2 \\
+z_d    &\quad \text{= displacement height (m), } z_d = k_d \cdot h \\
+z_o    &\quad \text{= roughness length (m), } z_o = k_o \cdot h \\
+h      &\quad \text{= vegetation height (m)} \\
+k_d    &\quad \text{= displacement scalar (unitless), default = 0.7} \\
+k_o    &\quad \text{= roughness scalar (unitless), default = 0.1}
+
+\end{align}
+$$
+For this analysis, a constant measurement height above the ground ($z_m$) of 2 meters is assumed. The four remaining uncertain parameters are windspeed ($v$), vegetation height ($h$), the displacement scalar ($k_d$), and the roughness scalar ($k_o$). 
+
+## c) Multi-Dimensional Parameter Space
+
+Since there are four uncertain parameters, we have a four-dimensional parameter space where a single sample lies within the unit hypercube $(v, h, k_d, k_o) \in [0,1]^4$. These are unit-uniform samples that must then be transformed to match the real distributions. It is fundamental that these parameters are sampled from a uniform space, however, these values only become meaningful when mapped to the true distributions by inverting their cumulative distribution functions [@saltelli2010]. 
+
+# II. Set Up
+
+First, we will load the necessary libraries for this workflow. 
+
+## a) Load Libraries
+
+```{r}
+#this clears out the environment
+rm(list = ls())
+
+#load the necessary libraries
+library(calecopal)
+library(sensitivity)
+library(tidyverse)
+#library(gridExtra)
+library(purrr)
+#library(ggpubr)
+library(here)
+library(kableExtra)
+library(htmltools)
+library(janitor)
+
+```
+
+
+## b) Sobol Design
+
+Then, to start, we will generate two samples of parameters sets by sampling from apriori distributions for each parameter value. 
+
+```{r}
+#set the seed for reproducibility
+set.seed(42)
+
+#determine the number of parameter values to simulate for each parameter metric
+np <- 1000
+
+#create a color palette to use throughout the project
+superbloom1 <- cal_palette(name = "superbloom1", n = 50, type = "continuous")
+
+#create a named list of colors from the superbloom1 palette
+colors <- c(uniform = "#8A7E9B",
+            simu1 = "#646A2D",
+            simu2 = "#437C90")
+
+```
+
+
+### i) Unit-Uniform Distriubtions
+
+As previously [disccused](#background), the first step in this process is to generate inputs (unit samples) with a uniform distribution across the four-dimensional parameter space. Eventually these samples will be transformed back to their true distributions after the Sobol sequences are selected. This method of Sobol analysis allows us to construct a structured set of inputs that can be evaluated to determine how sensitive the model output is to each of the four input parameters. 
+
+```{r}
+#use the sobolSalt function to create a structured set of inputs 
+sobol_obj <- sobolSalt(model = NULL,
+                       X1 = matrix(runif(np * 4), nrow = np), #generate unit-uniform samples in [0,1] for X1
+                       X2 = matrix(runif(np * 4), nrow = np), #generate unit-uniform samples in [0,1] for X2
+                       nboot = 100, #use 100 bootstrap replications 
+                       scheme = "B") #allows for second-order interactions
+
+```
+
+
+### ii) Extract Raw Sample Matrix 
+
+We can evaluate the distributions of these unit-uniform samples by extracting the raw Sobol sample matrix.
+
+```{r}
+#extract the raw Sobol sample matrix (in [0, 1])
+X_raw <- as.data.frame(sobol_obj$X)
+
+#name the columns in the dataframe
+colnames(X_raw) <- c("v_raw", "h_raw", "kd_raw", "ko_raw")
+
+```
+
+
+### iii) Visualize Uniform Distributions 
+
+And then we can visualize these distributions to ensure that they are uniform and normalized. 
+
+```{r}
+#pivot the raw samples to a longer format
+X_long <- X_raw %>% #start with X_raw
+  pivot_longer(cols = everything(), #select the values from all four columns
+               names_to = "Parameter", #create a new column called parameter with the old column headers
+               values_to = "Value") #create a new column called value with the corresponding values
+
+#plot histograms for each of the parameters 
+ggplot(X_long, aes(x = Value)) +
+  geom_histogram(bins = 30, fill = colors["uniform"], color = "black", alpha = 0.6) +
+  facet_wrap(~Parameter, scales = "free") +
+  labs(title = "Raw Sobol Samples:", 
+       subtitle = "Unit-Uniform Samples for Each Input Parameter",
+       x = "Sample Value",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(text = element_text(family = "Times New Roman"),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        axis.title = element_text(face = "bold", size = 14),
+        axis.text = element_text(size = 10))
+
+```
+
+
+## c) Transform Sobol Samples
+
+After establishing a uniform distribution for each of the sample parameter values, we can explore two scenarios of parameter values. 
+
+### i) Compare Scenarios
+
+The parameters for windspeed ($v$) and vegetation height ($h$) will vary in either scenario. However, in both scenarios we will transform the below parameters using the outlined assumptions:
+
+$$
+\begin{align}
+
+k_d    &\quad \text{= normally distributed with a mean of 0.7 and a standard deviation of 0.007} \\
+k_o    &\quad \text{= normally distributed with a mean of 0.1 and a standard deviation of 0.001}
+
+\end{align}
+$$
+
+In scenario one, the below windspeed and vegetation height are used to simulate an area with short vegetation and fast, highly variable windspeeds:
+
+$$
+\begin{align}
+
+v      &\quad \text{= normally distributed with a mean of 300 cm/s and a standard deviation of 50cm/s} \\
+h      &\quad \text{= equally likely across a range of 3.5m and 5.5m} \\
+
+\end{align}
+$$
+In scenario two, the environment is simulated to have lower, less variable windspeeds and taller vegetation following the below distributions:
+
+$$
+\begin{align}
+
+v      &\quad \text{= normally distributed with a mean of 250 cm/s and a standard deviation of 30cm/s} \\
+h      &\quad \text{= equally likely across a range of 9.5m and 10.5m} \\
+
+\end{align}
+$$
+
+### ii) Transform Distributions
+
+Now we can transform the samples according to the true distributions defined for each scenario. 
+
+```{r}
+#transform the samples according to the true distributions 
+X_transformed1 <- data.frame(v = qnorm(X_raw$v_raw, mean = 3.00, sd = 0.50), #use a quantile normal distribution 
+                             h = qunif(X_raw$h_raw, min = 3.5, max = 5.5), #use a quantile uniform distribution
+                             kd = qnorm(X_raw$kd_raw, mean = 0.7, sd = 0.007), #use a quantile normal distribution 
+                             ko = qnorm(X_raw$ko_raw, mean = 0.1, sd = 0.001)) #use a quantile normal distribution
+
+#create a list of parameter names
+param_names <- colnames(X_transformed1)
+
+#transform the samples according to the true distributions 
+X_transformed2 <- data.frame(v = qnorm(X_raw$v_raw, mean = 2.50, sd = 0.30), #use a quantile normal distribution 
+                             h = qunif(X_raw$h_raw, min = 9.5, max = 10.5), #use a quantile uniform distribution
+                             kd = qnorm(X_raw$kd_raw, mean = 0.7, sd = 0.007), #use a quantile normal distribution 
+                             ko = qnorm(X_raw$ko_raw, mean = 0.1, sd = 0.001)) #use a quantile normal distribution
+
+```
+
+
+### iii) Evaluate Scenarios
+
+After using the quantile transformations, we can visualize the distribution of parameter sample values to ensure they follow their true distribution. 
+
+```{r}
+#pivot the transformed samples to a longer format
+X_trans_long1 <- X_transformed1 %>%
+  pivot_longer(cols = everything(), #select the values from all four columns
+               names_to = "Parameter", #create a new column called parameter with the old column headers
+               values_to = "Value") #create a new column called value with the corresponding values
+
+#pivot the transformed samples to a longer format
+X_trans_long2 <- X_transformed2 %>%
+  pivot_longer(cols = everything(), #select the values from all four columns
+               names_to = "Parameter", #create a new column called parameter with the old column headers
+               values_to = "Value") #create a new column called value with the corresponding values
+
+```
+
+
+#### 1. Scenario One
+
+```{r}
+#plot histograms for each of the parameters 
+ggplot(X_trans_long1, aes(x = Value)) +
+  geom_histogram(bins = 30, fill = colors["simu1"], color = "black", alpha = 0.6) +
+  facet_wrap(~Parameter, scales = "free") +
+  labs(title = "Transformed Sobol Samples:",
+       subtitle = "Scenario One",
+       x = "Sample Value",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(text = element_text(family = "Times New Roman"),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        axis.title = element_text(face = "bold", size = 14),
+        axis.text = element_text(size = 10))
+
+```
+
+#### 2. Scenario Two
+
+```{r}
+#plot histograms for each of the parameters 
+ggplot(X_trans_long2, aes(x = Value)) +
+  geom_histogram(bins = 30, fill = colors["simu2"], color = "black", alpha = 0.6) +
+  facet_wrap(~Parameter, scales = "free") +
+  labs(title = "Transformed Sobol Samples:",
+       subtitle = "Scenario Two",
+       x = "Sample Value",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(text = element_text(family = "Times New Roman"),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        axis.title = element_text(face = "bold", size = 14),
+        axis.text = element_text(size = 10))
+
+```
+
+
+Now that we have verified that each set of parameter sample values follows the appropriate distribution, we can apply the atmospheric model for these parameters sets for both scenarios. 
+
+# III. Atmospheric Conductance Model
+
+First, we can examine the script containing the appropriate function and ensure that the parameters align with those we have sampled. 
+
+## a) Atmospheric Conductance Function {#function}
+
+```{r}
+#load in the atmospheric_conductance function 
+source(here("scripts", "atm_conductance.R"))
+
+#view the format of the function 
+atmospheric_condunctance
+
+```
+
+
+## b) Compute Atmospheric Conductance
+
+Then we can use the [atmospheric_conductance](#function) to calculate the conductance in mm/s for each set of simulated parameter values. 
+
+```{r}
+#use the atmospheric_conductance function to calculate the atmospheric conductance for each set of parameters generated using the Sobol method 
+X_transformed1$Ca <- pmap_dbl(X_transformed1, atmospheric_condunctance) #map the atmospheric_conductance function over the columns of the X_transformed df
+  
+```
+
+
+```{r}
+#use the atmospheric_conductance function to calculate the atmospheric conductance for each set of parameters generated using the Sobol method 
+X_transformed2$Ca <- pmap_dbl(X_transformed2, atmospheric_condunctance) #map the atmospheric_conductance function over the columns of the X_transformed df
+  
+```
+
+
+## c) Visualize Conductance Estimates
+
+Next, we can visualize the distribution of atmospheric conductance estimates across both simulations to help us further evaluate the parameter uncertainty. 
+
+```{r}
+# Combine both simulations into one dataframe with a label
+X_combined <- bind_rows(X_transformed1 %>% mutate(simulation = "Scenario 1"),
+                        X_transformed2 %>% mutate(simulation = "Scenario 2"))
+
+ggplot(X_combined, aes(x = Ca, fill = simulation)) +
+  geom_density(alpha = 0.5, color = "black") +
+  scale_fill_manual(values = c("Scenario 1" = colors[["simu1"]],
+                               "Scenario 2" = colors[["simu2"]])) +
+  labs(title = "Atmospheric Conductance Distributions",
+       subtitle = "Simulated Outputs Across Parameter Uncertainity",
+       x = "Conductance (mm/s)",
+       y = "Density",
+       fill = "Simulation") +
+  theme_minimal() +
+  theme(text = element_text(family = "Times New Roman"),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 14, hjust = 0.5),
+        axis.title = element_text(face = "bold", size = 14),
+        axis.text = element_text(size = 10),
+        legend.title = element_text(face = "bold", size = 12),
+        legend.text = element_text(size = 10),
+        legend.position = "bottom")
+
+
+```
+
+
+# IV. Sobol Indicies
+
+Finally, we can calculate the total-effect and first-order Sobol indices to determine the parameter sensitivities for both simulations. 
+
+## a) Calculate Indicies 
+
+```{r}
+#update the matrix of the Sobol object to contain a full matrix of parameter sets 
+sobol_parms1 <- sensitivity::tell(sobol_obj, #method to estimate the sensitivity measures of the incomplete Sobol object
+                                 X_transformed1$Ca) #estimated using the conductance values output from the model 
+
+#assign the correct column names/parameters to the Sobol object for the total-effect Sobol index matrix
+rownames(sobol_parms1$T) <- colnames(X_transformed1)[1:4]
+
+#assign the correct column names/parameters to the Sobol object for the first-order Sobol index matrix
+rownames(sobol_parms1$S) <- colnames(X_transformed1)[1:4]
+
+```
+
+
+
+```{r}
+#update the matrix of the Sobol object to contain a full matrix of parameter sets 
+sobol_parms2 <- sensitivity::tell(sobol_obj, #method to estimate the sensitivity measures of the incomplete Sobol object
+                                 X_transformed2$Ca) #estimated using the conductance values output from the model 
+
+#assign the correct column names/parameters to the Sobol object for the total-effect Sobol index matrix
+rownames(sobol_parms2$T) <- colnames(X_transformed2)[1:4]
+
+#assign the correct column names/parameters to the Sobol object for the first-order Sobol index matrix
+rownames(sobol_parms2$S) <- colnames(X_transformed2)[1:4]
+
+```
+
+
+## b) Sobol Indices
+
+### i) Total-Effect Indices 
+
+The total-effect indices tell us the sum of the variance associated with a particular parameter and the interaction with other parameters. Due to interactions, this means that a single parameter can have a total effect greater than 1.
+
+#### 1. Scenario One
+
+```{r}
+#create a dataframe with the total-effect indices
+t_indices1 <- sobol_parms1$T %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Parameter") %>%
+  arrange(desc(original)) %>%  #original holds total-effect index
+  clean_names()  %>% 
+  mutate(influential = case_when(min_c_i <= 0 & max_c_i >= 0 ~ "no", #CI includes zero so the parameter is NOT influential
+                                 TRUE ~ "yes")) %>% #CI excludes zero so the parameter is influential
+  select(-"std_error", -"bias")
+
+#create a kable
+t_kable1 <- kable(t_indices1,
+                  col.names = c("Parameter", "Total-Effect Index", "Min C.I.", "Max C.I", "Influential ?"),
+                  caption = htmltools::tags$div(style = "text-align: center; font-size: 1rem;",
+                                               list(htmltools::tags$strong("Total-Effect Indices"),
+                                                    htmltools::tags$br(),
+                                                    htmltools::tags$span("Scenario 1: Shorter Vegetation and Higher Windspeed Variability"))),
+                  escape = FALSE) %>%
+  kable_styling(full_width = FALSE, font_size = "0.8rem", position = "center") %>%
+  row_spec(row = 0, bold = TRUE, background = "rgba(174, 209, 200, 0.4)") %>%
+  row_spec(row = 0:4, align = "center") %>% 
+  kable_classic(html_font = "Times New Roman") 
+
+#view the kable
+t_kable1
+
+```
+
+
+
+#### 2. Scenario Two
+
+```{r}
+#create a dataframe with the total-effect indices
+t_indices2 <- sobol_parms2$T %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Parameter") %>%
+  arrange(desc(original)) %>%  #original holds total-effect index
+  clean_names()  %>% 
+  mutate(influential = case_when(min_c_i <= 0 & max_c_i >= 0 ~ "no", #CI includes zero so the parameter is NOT influential
+                                 TRUE ~ "yes")) %>% #CI excludes zero so the parameter is influential
+  select(-"std_error", -"bias")
+
+#create a kable
+t_kable2 <- kable(t_indices2,
+                  col.names = c("Parameter", "Total-Effect Index", "Min C.I.", "Max C.I", "Influential ?"),
+                  caption = htmltools::tags$div(style = "text-align: center; font-size: 1rem;",
+                                               list(htmltools::tags$strong("Total-Effect Indices"),
+                                                    htmltools::tags$br(),
+                                                    htmltools::tags$span("Scenario 2: Taller Vegetation and Lower Windspeed Variability"))),
+                  escape = FALSE) %>%
+  kable_styling(full_width = FALSE, font_size = "0.8rem", position = "center") %>%
+  row_spec(row = 0, bold = TRUE, background = "rgba(174, 209, 200, 0.4)") %>%
+  row_spec(row = 0:4, align = "center") %>% 
+  kable_classic(html_font = "Times New Roman") 
+
+#view the kable
+t_kable2
+
+```
+
+
+Based on the total-effect indices, we can determine that windspeed ($v$) is the most influential parameter in both scenarios. The second most influential parameter in scenario one (shorter vegetation and higher windspeed variability) is vegetation height ($h$) while the second most influential parameter in scenario two (taller vegetation and lower windspeed variability) is the displacement scalar ($k_d$). 
+
+### ii) First-Order Indices
+
+The first-order indices indicate the variance associated with the single parameter alone, not including interactions. When a parameter has a high total-effect index and a low first-order index, this indicates that the parameter is mostly important through interactions. When the total-effect and first-order index are roughly equivalent, this means that the parameter acts independently more than interactive. And finally, if the total-effect index is low, this means the parameter is not very influential. 
+
+#### 1. Scenario One
+
+```{r}
+#create a dataframe with the first-order indices
+s_indices1 <- sobol_parms1$S %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Parameter") %>%
+  arrange(desc(original)) %>%  #original holds total-effect index
+  clean_names()  %>% 
+  mutate(influential = case_when(min_c_i <= 0 & max_c_i >= 0 ~ "no", #CI includes zero so the parameter is NOT influential
+                                 TRUE ~ "yes")) %>% #CI excludes zero so the parameter is influential
+  select(-"std_error", - "bias")
+
+#create a kable
+s_kable1 <- kable(s_indices1,
+                  col.names = c("Parameter", "First-Order Index", "Min C.I.", "Max C.I", "Influential ?"),
+                  caption = htmltools::tags$div(style = "text-align: center; font-size: 1rem;",
+                                               list(htmltools::tags$strong("First-Order Indices"),
+                                                    htmltools::tags$br(),
+                                                    htmltools::tags$span("Scenario 1: Shorter Vegetation and Higher Windspeed Variability"))),
+                  escape = FALSE) %>%
+  kable_styling(full_width = FALSE, font_size = "0.8rem", position = "center") %>%
+  row_spec(row = 0, bold = TRUE, background = "rgba(174, 209, 200, 0.4)") %>%
+  row_spec(row = 0:4, align = "center") %>% 
+  kable_classic(html_font = "Times New Roman") 
+
+#view the kable
+s_kable1
+
+```
+
+
+#### 2. Scenario Two
+
+```{r}
+#create a dataframe with the first-order indices
+s_indices2 <- sobol_parms2$S %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Parameter") %>%
+  arrange(desc(original)) %>%  #original holds total-effect index
+  clean_names()  %>% 
+  mutate(influential = case_when(min_c_i <= 0 & max_c_i >= 0 ~ "no", #CI includes zero so the parameter is NOT influential
+                                 TRUE ~ "yes")) %>% #CI excludes zero so the parameter is influential
+  select(-"std_error", -"bias")
+
+#create a kable
+s_kable2 <- kable(s_indices2,
+                  col.names = c("Parameter", "First-Order Index", "Min C.I.", "Max C.I", "Influential ?"),
+                  caption = htmltools::tags$div(style = "text-align: center; font-size: 1rem;",
+                                               list(htmltools::tags$strong("First-Order Indices"),
+                                                    htmltools::tags$br(),
+                                                    htmltools::tags$span("Scenario 2: Taller Vegetation and Lower Windspeed Variability"))),
+                  escape = FALSE) %>%
+  kable_styling(full_width = FALSE, font_size = "0.8rem", position = "center") %>%
+  row_spec(row = 0, bold = TRUE, background = "rgba(174, 209, 200, 0.4)") %>%
+  row_spec(row = 0:4, align = "center") %>% 
+  kable_classic(html_font = "Times New Roman") 
+
+#view the kable
+s_kable2
+
+```
+
+
+In scenario one, the total-effect index for windspeed is ($v = 0.85$) and the first-order index is ($v = 0.80$). In scenario two, the total-effect index for windspeed is ($v = 0.95$) and the first-order index is ($v = 0.96$). Both scenarios have similiar values for the total-effect and first-order indices which indicates that windspeed alone (more so than it's interaction with other parameters) is influencing the model dynamics. 
+
+### ii) Second-Order Indices
+
+We can confirm that there are insignificant parameter interactions by examining the second-order indices. The second-order index indicates how much of the variance is explained by the interaction between two parameters. 
+
+#### 1. Scenario One
+
+```{r}
+#create a dataframe with the second-order indices
+s2_indices1 <- sobol_parms1$S2 %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Pair") %>%
+  mutate(Pair = str_replace_all(Pair, c("X1" = param_names[1],
+                                        "X2" = param_names[2],
+                                        "X3" = param_names[3],
+                                        "X4" = param_names[4]))) %>% 
+  arrange(desc(original)) %>%  #original holds total-effect index
+  clean_names() %>% 
+  mutate(influential = case_when(min_c_i <= 0 & max_c_i >= 0 ~ "no",   #CI includes zero so the parameter is NOT influential
+                                 TRUE ~ "yes")) %>% #CI excludes zero so the parameter is influential
+  select(-"std_error", -"bias")
+
+#create a kable
+s2_kable1 <- kable(s2_indices1,
+                   col.names = c("Parameter", "Second-Order Index", "Min C.I.", "Max C.I", "Influential ?"),
+                   caption = htmltools::tags$div(style = "text-align: center; font-size: 1rem;",
+                                               list(htmltools::tags$strong("Second-Order Indices"),
+                                                    htmltools::tags$br(),
+                                                    htmltools::tags$span("Scenario 1: Shorter Vegetation and Higher Windspeed Variability"))),
+                   escape = FALSE) %>%
+  kable_styling(full_width = FALSE, font_size = "0.8rem", position = "center") %>%
+  row_spec(row = 0, bold = TRUE, background = "rgba(174, 209, 200, 0.4)") %>%
+  row_spec(row = 0:6, align = "center") %>% 
+  kable_classic(html_font = "Times New Roman") 
+
+#view the kable
+s2_kable1
+
+```
+
+
+#### 2. Scenario Two
+
+```{r}
+#create a dataframe with the second-order indices
+s2_indices2 <- sobol_parms2$S2 %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Pair") %>%
+  mutate(Pair = str_replace_all(Pair, c("X1" = param_names[1],
+                                        "X2" = param_names[2],
+                                        "X3" = param_names[3],
+                                        "X4" = param_names[4]))) %>% 
+  arrange(desc(original)) %>%  #original holds total-effect index
+  clean_names() %>% 
+  mutate(influential = case_when(min_c_i <= 0 & max_c_i >= 0 ~ "no",   #CI includes zero so the parameter is NOT influential
+                                 TRUE ~ "yes")) %>% #CI excludes zero so the parameter is influential
+  select(-"std_error", -"bias")
+
+#create a kable
+s2_kable2 <- kable(s2_indices2,
+                   col.names = c("Parameter", "Second-Order Index", "Min C.I.", "Max C.I", "Influential ?"),
+                   caption = htmltools::tags$div(style = "text-align: center; font-size: 1rem;",
+                                               list(htmltools::tags$strong("Second-Order Indices"),
+                                                    htmltools::tags$br(),
+                                                    htmltools::tags$span("Scenario 2: Taller Vegetation and Lower Windspeed Variability"))),
+                   escape = FALSE) %>%
+  kable_styling(full_width = FALSE, font_size = "0.8rem", position = "center") %>%
+  row_spec(row = 0, bold = TRUE, background = "rgba(174, 209, 200, 0.4)") %>%
+  row_spec(row = 0:6, align = "center") %>% 
+  kable_classic(html_font = "Times New Roman") 
+
+#view the kable
+s2_kable2
+
+```
+
+
+From the second-order indices for both scenarios, we can confirm that there are no parameter interactions that are greatly influencing the model dynamics. 
+
+## c) Examining Windspeed
+
+Now that we have concluded that windspeed is the most influential parameter for both scenarios, we can visualize the relationship between windspeed and atmospheric conductance. Additionally, if we color the points by the second most influential parameter in scenario one (the vegetation height) for both scenarios, we can further understand how these parameters influence the model dynamics under different true distributions. 
+
+### 1. Scenario One
+
+```{r}
+#plot conductance vs. windspeed, color by second-most influential parameter
+ggplot(X_transformed1, aes(x = v, y = Ca, color = .data[["h"]])) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_viridis_c(name = "Vegetation Height", option = "D") +
+  labs(title = "Scenario 1: Atmospheric Conductance vs. Windspeed",
+       subtitle = paste("Points Colored by Vegetation Height", "(m)"),
+       x = "Windspeed (m/s)",
+       y = "Conductance (mm/s)") +
+  theme_minimal() +
+  theme(text = element_text(family = "Times New Roman"),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 12, hjust = 0.5),
+        axis.title = element_text(face = "bold", size = 14),
+        axis.text = element_text(size = 10),
+        legend.title = element_text(face = "bold", size = 12),
+        legend.text = element_text(size = 10))
+
+```
+
+
+### 2. Scenario Two
+
+```{r}
+#plot conductance vs. windspeed, color by vegetation height
+ggplot(X_transformed2, aes(x = v, y = Ca, color = .data[["h"]])) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_viridis_c(name = "Vegetation Height", option = "D") +
+  labs(title = "Scenario 1: Atmospheric Conductance vs. Windspeed",
+       subtitle = paste("Points Colored by Vegetation Height", "(m)"),
+       x = "Windspeed (m/s)",
+       y = "Conductance (mm/s)") +
+  theme_minimal() +
+  theme(text = element_text(family = "Times New Roman"),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 12, hjust = 0.5),
+        axis.title = element_text(face = "bold", size = 14),
+        axis.text = element_text(size = 10),
+        legend.title = element_text(face = "bold", size = 12),
+        legend.text = element_text(size = 10))
+
+```
+
+From these plots it is readily apparent that there is a strong relationship between windspeed and atmospheric conductance for both scenarios. However, based on the distributions of color points, we can also see that there is a relationship between vegetation height and conductance in scenario one, but this is not a driving parameter in scenario two. 
+
+
+# V. References
+
+::: {#refs}
+:::
