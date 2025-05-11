@@ -1,5 +1,5 @@
 ---
-title: "Informal Sensitivity Analysis of Modeled Almond Prices in Response to Climate Variation"
+title: "Sobol Sensitivity Analysis of an Atmospheric Conductance Model"
 output:
   github_document:
     toc: false
@@ -7,5 +7,5 @@ output:
 
 # Contents
 
-This repository (knitted HTML linked here: [almond_profit](https://jadenorli.github.io/eds-230-hw3/Code/EDS_230_HW3.html)) implements a simple model of almond yield anomaly in response to climate variables.
+This repository (knitted HTML linked here: [atmospheric_conductance](https://jadenorli.github.io/eds-230-hw4/code/EDS_230_HW4.html)) implements a simple model of atmospheric conductance and evaluates parameter uncertainity using Sobol sensitivity analysis. 
 
